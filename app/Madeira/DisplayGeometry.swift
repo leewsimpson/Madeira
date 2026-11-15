@@ -126,6 +126,7 @@ extension DisplayGeometry {
     func start() {
         guard !started else { return }
         started = true
+        TouchRouteLog.start()   // [touch-route] diagnostics (device round 1b)
         let center = NotificationCenter.default
         center.addObserver(forName: UIScene.willConnectNotification, object: nil, queue: .main) { note in
             MainActor.assumeIsolated {
@@ -174,6 +175,7 @@ extension DisplayGeometry {
             MainActor.assumeIsolated { DisplayGeometryMonitor.shared.report(scene, reason: "traits") }
         }
         watches[id] = Watch(geometry: geometry, traits: traits)
+        for w in scene.windows { TouchRouteLog.attach(w) }
         report(scene, reason: reason)
     }
 
@@ -193,6 +195,177 @@ extension DisplayGeometry {
             LogStore.shared.log("[display-geometry] resolution choices follow the screen: default \(d.w)x\(d.h)"
                 + (ResolutionChoices.screen720Value.map { " 720-lines \($0)" } ?? ""))
         }
+    }
+}
+#endif
+
+#if canImport(UIKit)
+// MARK: - [touch-route]: where each tap goes (madeira-duo device round 1b)
+//
+// Diagnostics for the device rounds, not for upstream. Built with the iOS 27
+// SDK, the app runs natively on the iPhone Duo (an iOS 26.5 SDK build runs
+// letterboxed), and there the library's toolbar and tab bar buttons highlight
+// but do nothing. For the first taps of each run these lines say which window
+// and view a touch landed on, whether it ended or was cancelled, the gesture
+// recognizers that saw it and their states, and what was presented just
+// after; every window shown or hidden is listed too.
+
+/// Sees every touch that begins in its window. Never recognises, delays or
+/// cancels one (the pattern of HardwareInput's TouchFocusObserver).
+final class TouchRouteObserver: UIGestureRecognizer, UIGestureRecognizerDelegate {
+    init() {
+        super.init(target: nil, action: nil)
+        cancelsTouchesInView = false
+        delaysTouchesBegan = false
+        delaysTouchesEnded = false
+        delegate = self
+    }
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        for t in touches { TouchRouteLog.began(t) }
+    }
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+        for t in touches { TouchRouteLog.finished(t, how: "ended") }
+        finishIfIdle(event)
+    }
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+        for t in touches { TouchRouteLog.finished(t, how: "CANCELLED") }
+        finishIfIdle(event)
+    }
+    /// Fail once every touch of the sequence is over, so UIKit resets it.
+    private func finishIfIdle(_ event: UIEvent) {
+        let live = (event.allTouches ?? []).contains { $0.phase != .ended && $0.phase != .cancelled }
+        if !live { state = .failed }
+    }
+    func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+    func gestureRecognizer(_ g: UIGestureRecognizer, shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool { false }
+    func gestureRecognizer(_ g: UIGestureRecognizer, shouldRequireFailureOf other: UIGestureRecognizer) -> Bool { false }
+}
+
+@MainActor enum TouchRouteLog {
+    /// Touches and window lines logged per run, so the log stays readable.
+    static let touchLimit = 60
+    static let windowLimit = 120
+    private static var touches = 0
+    private static var windowLines = 0
+    private static var ids: [ObjectIdentifier: Int] = [:]
+    private static var started = false
+
+    static func start() {
+        guard !started else { return }
+        started = true
+        let center = NotificationCenter.default
+        center.addObserver(forName: UIWindow.didBecomeVisibleNotification, object: nil, queue: .main) { note in
+            MainActor.assumeIsolated {
+                guard let w = note.object as? UIWindow else { return }
+                TouchRouteLog.window(w, "visible")
+                TouchRouteLog.attach(w)
+            }
+        }
+        center.addObserver(forName: UIWindow.didBecomeHiddenNotification, object: nil, queue: .main) { note in
+            MainActor.assumeIsolated {
+                if let w = note.object as? UIWindow { TouchRouteLog.window(w, "hidden") }
+            }
+        }
+    }
+
+    /// Watches a window's touches; the system keyboard's windows are left alone.
+    static func attach(_ w: UIWindow) {
+        let name = String(describing: type(of: w))
+        guard !name.contains("Keyboard"), !name.contains("TextEffects") else { return }
+        guard !(w.gestureRecognizers ?? []).contains(where: { $0 is TouchRouteObserver }) else { return }
+        w.addGestureRecognizer(TouchRouteObserver())
+    }
+
+    static func window(_ w: UIWindow, _ what: String) {
+        guard windowLines < windowLimit else { return }
+        windowLines += 1
+        LogStore.shared.log("[touch-route] window \(what) \(describe(w))")
+    }
+
+    /// Every window of every scene, top first.
+    static func inventory(_ reason: String) {
+        let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
+        for w in windows.sorted(by: { $0.windowLevel.rawValue > $1.windowLevel.rawValue }) { window(w, "list(\(reason))") }
+    }
+
+    static func describe(_ w: UIWindow) -> String {
+        let root = w.rootViewController.map { String(describing: type(of: $0)) } ?? "-"
+        return "\(type(of: w)) level=\(Int(w.windowLevel.rawValue)) frame=\(rect(w.frame)) hidden=\(w.isHidden ? 1 : 0)"
+            + " key=\(w.isKeyWindow ? 1 : 0) alpha=\(String(format: "%.2f", Double(w.alpha)))"
+            + " touch=\(w.isUserInteractionEnabled ? 1 : 0) scene-screen=\(rect(w.windowScene?.screen.bounds ?? .zero))"
+            + " root=\(root)"
+    }
+
+    static func rect(_ r: CGRect) -> String {
+        String(format: "(%.0f,%.0f %.0fx%.0f)", Double(r.minX), Double(r.minY), Double(r.width), Double(r.height))
+    }
+
+    /// The touched view and its first ancestors, innermost first.
+    static func chain(_ v: UIView?) -> String {
+        var names: [String] = []
+        var current = v
+        while let c = current, names.count < 8 {
+            names.append(String(describing: type(of: c)))
+            current = c.superview
+        }
+        return names.isEmpty ? "-" : names.joined(separator: " < ")
+    }
+
+    static func recognizers(_ t: UITouch) -> String {
+        let list = (t.gestureRecognizers ?? []).filter { !($0 is TouchRouteObserver) }
+            .map { "\(type(of: $0)):\(name($0.state))" + ($0.isEnabled ? "" : "(off)") }
+        return list.isEmpty ? "-" : list.joined(separator: ",")
+    }
+
+    static func name(_ s: UIGestureRecognizer.State) -> String {
+        switch s {
+        case .possible: return "possible"
+        case .began: return "began"
+        case .changed: return "changed"
+        case .ended: return "ended"
+        case .cancelled: return "cancelled"
+        case .failed: return "failed"
+        @unknown default: return "other"
+        }
+    }
+
+    static func began(_ t: UITouch) {
+        guard touches < touchLimit else { return }
+        touches += 1
+        let n = touches
+        ids[ObjectIdentifier(t)] = n
+        let p = t.location(in: t.window)
+        let win = t.window.map { "\(type(of: $0)) level=\(Int($0.windowLevel.rawValue))" } ?? "-"
+        LogStore.shared.log(String(format: "[touch-route] #%d began at (%.0f,%.0f)", n, Double(p.x), Double(p.y))
+            + " window=\(win) type=\(t.type.rawValue) view=\(chain(t.view))")
+    }
+
+    static func finished(_ t: UITouch, how: String) {
+        guard let n = ids.removeValue(forKey: ObjectIdentifier(t)) else { return }
+        let p = t.location(in: t.window)
+        LogStore.shared.log(String(format: "[touch-route] #%d ", n) + how
+            + String(format: " at (%.0f,%.0f)", Double(p.x), Double(p.y))
+            + " view=\(chain(t.view)) recognizers=\(recognizers(t))")
+        // What the tap led to: a menu, sheet or tab change shows up here.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            MainActor.assumeIsolated {
+                LogStore.shared.log("[touch-route] #\(n) after: presented=\(TouchRouteLog.presented())")
+                if n <= 3 || how != "ended" { TouchRouteLog.inventory("#\(n)") }
+            }
+        }
+    }
+
+    /// The view controllers presented over each window's root, outermost last.
+    static func presented() -> String {
+        var out: [String] = []
+        for w in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).flatMap(\.windows) {
+            var vc = w.rootViewController?.presentedViewController
+            while let p = vc {
+                out.append(String(describing: type(of: p)))
+                vc = p.presentedViewController
+            }
+        }
+        return out.isEmpty ? "none" : out.joined(separator: ",")
     }
 }
 #endif

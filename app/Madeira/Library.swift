@@ -3507,7 +3507,12 @@ struct LibraryView: View {
                 }
             } label: { Label("Library options", systemImage: "line.3.horizontal.decrease") }
         }
-        ToolbarItem(placement: .topBarTrailing) { Button { browser = true } label: { Label("Add executable", systemImage: "plus") } }
+        ToolbarItem(placement: .topBarTrailing) {
+            Button {
+                LogStore.shared.log("[touch-route] library + tapped")   // madeira-duo diagnostics (round 1b)
+                browser = true
+            } label: { Label("Add executable", systemImage: "plus") }
+        }
     }
     @ToolbarContentBuilder private var settingsToolbar: some ToolbarContent {
         ToolbarItem(placement: .topBarTrailing) {
@@ -3521,6 +3526,7 @@ struct LibraryView: View {
         }
     }
     private func switchTab(to newTab: Int) {
+        LogStore.shared.log("[touch-route] library tab \(tab) -> \(newTab)")   // madeira-duo diagnostics (round 1b)
         guard newTab != tab else { return }
         withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .default) { tab = newTab }
     }

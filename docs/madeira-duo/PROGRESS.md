@@ -38,4 +38,17 @@ Round 1 can be built from this branch: the P2 to P4 changes only act when the sc
 
 ## CI
 
-`runs-on: xcode-27` is GitHub's hosted Xcode 27 image (generally available since October 2026), so the fork needs no runner override. Fork Actions are enabled, but no workflow has run on it yet: enable workflows in the fork's Actions tab, then start the first (several hours) run on `main`.
+`runs-on: xcode-27` is GitHub's hosted Xcode 27 image (generally available since October 2026), so the fork needs no runner override. The first fork run (`main`, 2026-11-15) took 66 minutes; with its caches a branch build takes about 10. The first branch build failed on one compile error (`effectiveGeometry.coordinateSpace` needs iOS 26), fixed in 3d5cc589.
+
+## Device round 1 (2026-11-15): results
+
+From `[display-geometry]` on an iPhone19,4, iOS 27.2.1:
+
+- Outer screen: 466x678 pt portrait, 1398x2034 px @3x, `compact/regular`, idiom `phone`, one UIScreen. Default resolution 1152x792.
+- Inner screen: 951x669 pt, held normally it reads `landscape-left`; 1878x2670 px, scale 3, native scale 2.807; `regular/regular` with idiom `phone` (no iPhone did that before); `UIScreen.screens` is 2 while unfolded. Default resolution 1152x808.
+- A fold is a `geometry` change of the same scene plus `screen-connect`/`screen-disconnect`; no scene disconnect, so the app is not relaunched and P4 stays small.
+- No reading storm: lines only at folds.
+
+The library's toolbar (filter menu, +) and tab bar (Settings) highlight but do nothing, on both screens. Not the Duo commit: the fork's `main` build does the same. The official 0.2.0 IPA works because it was built with Xcode 26.5 / iOS 26.5 SDK (DTSDKName iphoneos26.5), so iOS runs it letterboxed in a compatibility window; every fork build uses Xcode 27.1 / iOS 27.1 SDK and runs natively. Unknown yet whether an ordinary iPhone on iOS 27 shows the same with an SDK 27 build. Overlay windows (PassthroughWindow, ControlsWindow, LibraryKeyboardWindow) and the window-level touch observers (TouchFocusObserver, WindowTouchObserver) all pass touches through.
+
+Round 1b adds `[touch-route]` diagnostics (DisplayGeometry.swift; remove before upstream): each window shown or hidden, the first 60 touches with their window, view chain, ended or CANCELLED, the gesture recognizers' states, and what was presented 0.6 s later; `library + tapped` and `library tab a -> b` when those actions run.
