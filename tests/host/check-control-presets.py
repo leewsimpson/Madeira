@@ -51,6 +51,12 @@ let screens: [(String, ControlPresetScreen)] = [
     ("13in tablet", ControlPresetScreen(width: 1366, height: 1024, top: 24, bottom: 20)),
     ("mini tablet", ControlPresetScreen(width: 1133, height: 744, top: 24, bottom: 20)),
     ("phone, portrait", ControlPresetScreen(width: 402, height: 874, left: 0, right: 0, top: 62, bottom: 34)),
+    // iPhone Duo (placeholders until measured, docs/madeira-duo/PLAN.md P1):
+    // inner screen about 1.4:1, outer screen in both candidate shapes.
+    ("Duo inner", ControlPresetScreen(width: 1335, height: 939, top: 24, bottom: 20)),
+    ("Duo inner, portrait", ControlPresetScreen(width: 939, height: 1335, top: 24, bottom: 20)),
+    ("Duo outer 19.5:9", ControlPresetScreen(width: 812, height: 375, left: 44, right: 44, top: 0, bottom: 21)),
+    ("Duo outer 1.4:1", ControlPresetScreen(width: 672, height: 480, top: 0, bottom: 21)),
 ]
 let expected = ["LS", "RS", "D↑", "D↓", "D←", "D→", "A", "B", "X", "Y",
                 "LB", "RB", "LT", "RT", "View", "Menu", "L3", "R3"]

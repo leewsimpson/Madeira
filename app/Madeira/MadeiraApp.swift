@@ -17,6 +17,11 @@ struct MadeiraApp: App {
         // ml1172: read the screen on the main thread; library entries, whose
         // default Resolution comes from it, are also made on other threads.
         _ = ResolutionChoices.screen
+        // madeira-duo: remember this screen's shape (a foldable shows two).
+        ResolutionChoices.noteShape()
+        // [display-geometry] lines at launch and whenever a scene's geometry or size
+        // classes change (a foldable folding, Stage Manager): DisplayGeometry.swift.
+        DisplayGeometryMonitor.shared.start()
         // A sign-in an installer left goes into the Keychain before anything else runs
         // (SigningRefresh.swift), only while the refresh is switched on.
         if SigningRefresh.enabled { SigningAccountStore.takeIn() }
