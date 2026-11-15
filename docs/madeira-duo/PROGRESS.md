@@ -52,3 +52,33 @@ From `[display-geometry]` on an iPhone19,4, iOS 27.2.1:
 The library's toolbar (filter menu, +) and tab bar (Settings) highlight but do nothing, on both screens. Not the Duo commit: the fork's `main` build does the same. The official 0.2.0 IPA works because it was built with Xcode 26.5 / iOS 26.5 SDK (DTSDKName iphoneos26.5), so iOS runs it letterboxed in a compatibility window; every fork build uses Xcode 27.1 / iOS 27.1 SDK and runs natively. Unknown yet whether an ordinary iPhone on iOS 27 shows the same with an SDK 27 build. Overlay windows (PassthroughWindow, ControlsWindow, LibraryKeyboardWindow) and the window-level touch observers (TouchFocusObserver, WindowTouchObserver) all pass touches through.
 
 Round 1b adds `[touch-route]` diagnostics (DisplayGeometry.swift; remove before upstream): each window shown or hidden, the first 60 touches with their window, view chain, ended or CANCELLED, the gesture recognizers' states, and what was presented 0.6 s later; `library + tapped` and `library tab a -> b` when those actions run.
+
+## Device rounds 1c–3 (2026-11-15): dead library buttons fixed
+
+- **Symptom:** built with the iOS 27 SDK (native on the Duo), the library's toolbar
+  buttons (filter, +) and tab bar (library, Settings) highlighted but did nothing.
+  iOS puts the status bar, toolbar and tab bar in a column inside the 84 pt right
+  safe-area inset.
+- **Round 1c** (`77f2aaf1`): the view dump showed the NavigationStack host covering
+  the full 951x669 window and hit-testing to the buttons correctly, but sitting
+  outside its parent's bounds. Taps stopped at the root `_UIHostingView`.
+- **Round 2** (`3eaf4461`): `.ignoresSafeArea()` on `ContentView()`, applied *inside*
+  the root modifiers. Didn't help. The new `PARENT` line named the blocker:
+  `_UIInteractionView<GCEventInteraction…>` at 867x635, the wrapper that
+  `.handlesGameControllerEvents` (`ClaimGamepadEvents`) adds, sized to the safe area.
+- **Round 3** (`ce0225f8`): `.ignoresSafeArea()` moved *outside*
+  `.modifier(ClaimGamepadEvents())` in `MadeiraApp.swift`. The same build adds a
+  `BarTapCheck` self-check plus a UIWindow hitTest "rescue" that turns on only if the
+  self-check fails. **Buttons work on the Duo (user confirmed).**
+- **Round 3 log (22:12):** the rescue never fired (no `rescue at` lines), yet tab
+  switches and toolbar taps worked, so the `.ignoresSafeArea()` move alone is the fix.
+  The self-check's 2 FAILs were false alarms: at each tab button's centre the hit test
+  returned a *different* `_UITabButton` instance (a second copy of the tab bar), and the
+  check compared object identity. The `duo-round 3` line repeats because it is logged
+  from ContentView's `onAppear`, which re-runs; those aren't relaunches.
+- **Open:** remove the diagnostics before upstream
+  (`[touch-route]`, `BarTapCheck` with its swizzle, the `duo-round` line, the two
+  `Library.swift` log lines). Check that regular iPhone and iPad layouts are
+  unchanged, and update `DUO_SCREENS` with the round 1 measurements.
+- **Builds:** IPAs go in `C:\Github\Madeira\builds\` (git-ignored), numbered, with
+  the newest marked `-INSTALL-THIS`.
