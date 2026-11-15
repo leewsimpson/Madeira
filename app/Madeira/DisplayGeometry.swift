@@ -186,6 +186,7 @@ extension DisplayGeometry {
         guard last[id] != now else { return }
         last[id] = now
         LogStore.shared.log("[display-geometry] \(reason) \(now.line)")
+        BarTapCheck.schedule(scene, reason: reason)   // madeira-duo round 3 diagnostics
         // The app's own screen (not an external display's scene) sets the
         // Resolution choices: a foldable's fold changes them, a rotation does not.
         guard scene.session.role == .windowApplication else { return }
@@ -412,6 +413,127 @@ final class TouchRouteObserver: UIGestureRecognizer, UIGestureRecognizerDelegate
             }
         }
         return out.isEmpty ? "none" : out.joined(separator: ",")
+    }
+}
+
+// MARK: - Bar-button self-check and tap rescue (madeira-duo device round 3)
+//
+// Diagnostics for the device rounds, not for upstream. A short while after
+// each launch, fold or rotation, every visible toolbar and tab-bar button is
+// tested: does a tap at its centre reach it? The answer is logged
+// ("self-check ... pass=N fail=M"), so a round needs no account of what the
+// taps did. If any button fails, a backup turns on: a tap that fell through to
+// the root view is handed to the bar button under it, found the way the round
+// 1c dump found it. It never acts while every button passes.
+
+@MainActor enum BarTapCheck {
+    private static var armed = false
+    private static var checking = false
+    private static var installed = false
+    private static var checks = 0
+    private static var rescues = 0
+
+    static func isBarButton(_ v: UIView) -> Bool {
+        let n = String(describing: type(of: v))
+        return n == "_UIButtonBarButton" || n == "_UITabButton"
+    }
+
+    /// Re-run the check a moment after a geometry change, once layout settles.
+    static func schedule(_ scene: UIWindowScene, reason: String) {
+        for delay in [1.5, 4.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                MainActor.assumeIsolated {
+                    for w in scene.windows where !w.isHidden {
+                        check(w, reason: reason + String(format: "+%.1fs", delay))
+                    }
+                }
+            }
+        }
+    }
+
+    static func check(_ w: UIWindow, reason: String) {
+        guard checks < 40 else { return }
+        var buttons: [UIView] = []
+        func walk(_ v: UIView) {
+            guard !v.isHidden, v.alpha > 0.01 else { return }
+            if isBarButton(v) { buttons.append(v) }
+            for s in v.subviews { walk(s) }
+        }
+        walk(w)
+        guard !buttons.isEmpty else { return }
+        checks += 1
+        checking = true
+        defer { checking = false }
+        var pass = 0
+        var fails: [String] = []
+        for b in buttons {
+            let f = b.convert(b.bounds, to: w)
+            let c = CGPoint(x: f.midX, y: f.midY)
+            guard !f.isEmpty, w.bounds.contains(c) else { continue }
+            let hit = w.hitTest(c, with: nil)
+            if let hit, hit === b || hit.isDescendant(of: b) {
+                pass += 1
+            } else {
+                fails.append(String(describing: type(of: b))
+                    + String(format: " at (%.0f,%.0f)", Double(c.x), Double(c.y))
+                    + " hit=" + (hit.map { String(String(describing: type(of: $0)).prefix(60)) } ?? "nil"))
+            }
+        }
+        armed = !fails.isEmpty
+        if armed { installRescue() }
+        LogStore.shared.log("[touch-route] self-check \(reason) pass=\(pass) fail=\(fails.count)"
+            + " rescue=\(armed ? "on" : "off") window=\(TouchRouteLog.rect(w.bounds))")
+        for line in fails { LogStore.shared.log("[touch-route] self-check FAIL \(line)") }
+    }
+
+    /// Called from UIWindow's hitTest once installed. Nil keeps UIKit's answer.
+    static func rescue(_ w: UIWindow, _ p: CGPoint, _ hit: UIView?) -> UIView? {
+        // Only a tap that reached no control: it stopped at the window or a root hosting view.
+        guard armed, !checking, let hit, let root = w.rootViewController?.view,
+              hit === root || hit === w || String(describing: type(of: hit)).hasPrefix("_UIHostingView")
+        else { return nil }
+        var found: UIView?
+        func walk(_ v: UIView, parentHolds: Bool) {
+            guard found == nil, !v.isHidden, v.alpha > 0.01, v.isUserInteractionEnabled else { return }
+            let holds = v.convert(v.bounds, to: w).contains(p)
+            if holds, !parentHolds, let r = v.hitTest(v.convert(p, from: w), with: nil),
+               isBarButton(r) || r is UIControl {
+                found = r
+                return
+            }
+            for s in v.subviews.reversed() { walk(s, parentHolds: holds) }
+        }
+        walk(root, parentHolds: true)
+        if let found, rescues < 30 {
+            rescues += 1
+            LogStore.shared.log("[touch-route] rescue" + String(format: " at (%.0f,%.0f)", Double(p.x), Double(p.y))
+                + " -> \(type(of: found))")
+        }
+        return found
+    }
+
+    private static func installRescue() {
+        guard !installed else { return }
+        installed = true
+        let original = #selector(UIView.hitTest(_:with:))
+        let replacement = #selector(UIWindow.madeiraDuoHitTest(_:with:))
+        guard let o = class_getInstanceMethod(UIWindow.self, original),
+              let r = class_getInstanceMethod(UIWindow.self, replacement) else { return }
+        if class_addMethod(UIWindow.self, original, method_getImplementation(r), method_getTypeEncoding(r)) {
+            class_replaceMethod(UIWindow.self, replacement, method_getImplementation(o), method_getTypeEncoding(o))
+        } else {
+            method_exchangeImplementations(o, r)
+        }
+        LogStore.shared.log("[touch-route] rescue installed")
+    }
+}
+
+extension UIWindow {
+    /// After the swap in BarTapCheck.installRescue, this runs as hitTest and the
+    /// call inside it reaches UIKit's own.
+    @objc func madeiraDuoHitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        let hit = madeiraDuoHitTest(point, with: event)
+        return BarTapCheck.rescue(self, point, hit) ?? hit
     }
 }
 #endif

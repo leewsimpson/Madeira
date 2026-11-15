@@ -1389,6 +1389,7 @@ struct ContentView: View {
                 entitlements = EntitlementStatus.check()
                 logEntitlementStatus()
                 logStore.log("[build] \(BuildStamp.text)")
+                logStore.log("[touch-route] duo-round 3 (self-check + rescue)")   // madeira-duo diagnostics: which test build this is
                 DeviceDiagnostics.logStartup()
                 DockOffline.begin()
                 FrontendChoice.logStartup()
