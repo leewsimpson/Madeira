@@ -338,6 +338,47 @@ final class TouchRouteObserver: UIGestureRecognizer, UIGestureRecognizerDelegate
         let win = t.window.map { "\(type(of: $0)) level=\(Int($0.windowLevel.rawValue))" } ?? "-"
         LogStore.shared.log(String(format: "[touch-route] #%d began at (%.0f,%.0f)", n, Double(p.x), Double(p.y))
             + " window=\(win) type=\(t.type.rawValue) view=\(chain(t.view))")
+        // Round 1c: the Duo draws the status bar, the toolbar's buttons and the tab
+        // bar in a column on the right (the safe area's right inset), and taps there
+        // reach only the root hosting view. Dump what is under such a tap.
+        if let w = t.window, p.x >= w.bounds.width - max(w.safeAreaInsets.right, 1), dumps < dumpLimit {
+            dumps += 1
+            dump(w, at: p, tag: "#\(n)")
+        }
+    }
+
+    private static var dumps = 0
+    static let dumpLimit = 6
+
+    /// Every view in the window whose frame holds the point, whether or not its
+    /// parent's does (a view outside its parent's bounds is drawn but never hit),
+    /// with its frame, flags and what its own hitTest returns there.
+    static func dump(_ w: UIWindow, at p: CGPoint, tag: String) {
+        var lines: [String] = []
+        func short(_ v: AnyObject) -> String {
+            let s = String(describing: type(of: v))
+            return s.count > 90 ? String(s.prefix(90)) + "…" : s
+        }
+        func walk(_ v: UIView, depth: Int, parentHolds: Bool) {
+            guard lines.count < 80 else { return }
+            let frame = v.convert(v.bounds, to: w)
+            let holds = frame.contains(p)
+            if holds {
+                let local = v.convert(p, from: w)
+                let hit = v.hitTest(local, with: nil).map(short) ?? "nil"
+                lines.append("\(depth) \(short(v)) frame=\(rect(frame))"
+                    + " hidden=\(v.isHidden ? 1 : 0) alpha=\(String(format: "%.2f", Double(v.alpha)))"
+                    + " touch=\(v.isUserInteractionEnabled ? 1 : 0) clips=\(v.clipsToBounds ? 1 : 0)"
+                    + (parentHolds ? "" : " OUTSIDE-PARENT")
+                    + " gestures=\(v.gestureRecognizers?.count ?? 0) hit=\(hit)")
+            }
+            for s in v.subviews { walk(s, depth: depth + 1, parentHolds: holds) }
+        }
+        walk(w, depth: 0, parentHolds: true)
+        LogStore.shared.log("[touch-route] \(tag) dump at " + String(format: "(%.0f,%.0f)", Double(p.x), Double(p.y))
+            + " window-safe-area=\(Int(w.safeAreaInsets.top)),\(Int(w.safeAreaInsets.left)),\(Int(w.safeAreaInsets.bottom)),\(Int(w.safeAreaInsets.right))"
+            + " views=\(lines.count)")
+        for l in lines { LogStore.shared.log("[touch-route] \(tag) | \(l)") }
     }
 
     static func finished(_ t: UITouch, how: String) {
