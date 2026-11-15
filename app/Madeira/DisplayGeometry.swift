@@ -62,7 +62,7 @@ extension DisplayGeometry {
         let screen = scene.screen
         let window = scene.keyWindow ?? scene.windows.first
         let insets = window?.safeAreaInsets ?? .zero
-        self.init(scene: scene.effectiveGeometry.coordinateSpace.bounds.size,
+        self.init(scene: scene.coordinateSpace.bounds.size,
                   screen: screen.bounds.size,
                   native: screen.nativeBounds.size,
                   scale: screen.scale,
