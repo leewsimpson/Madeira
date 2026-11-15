@@ -388,10 +388,32 @@ final class GamepadInput: @unchecked Sendable {
         }
     }
 
+    /// ml2200: "name=... category=... profile=..." for a controller's log lines.
+    nonisolated static func describe(_ controller: GCController, _ profile: GCExtendedGamepad?) -> String {
+        let profileName = profile.map { String(describing: type(of: $0)) } ?? "none"
+        return "name=\"\(controller.vendorName ?? "?")\" category=\"\(controller.productCategory)\" profile=\(profileName)"
+    }
+
+    /// ml2200: every controller GameController reports, logged when the set
+    /// changes, so a pad iOS lists but Madeira never slots shows up in the log.
+    /// A controller without an extended gamepad profile is skipped below.
+    @MainActor private var lastSeenControllers = ""
+    @MainActor private func logSeenControllers() {
+        let all = GCController.controllers()
+        let seen = all.map { Self.describe($0, $0.extendedGamepad) }.joined(separator: " | ")
+        guard seen != lastSeenControllers else { return }
+        lastSeenControllers = seen
+        LogStore.shared.log("[xinput] ml2200 GameController reports \(all.count) controller(s)\(all.isEmpty ? "" : ": " + seen)")
+        for controller in all where controller.extendedGamepad == nil {
+            LogStore.shared.log("[xinput] ml2200 \(Self.describe(controller, nil)) skipped: no extended gamepad profile")
+        }
+    }
+
     @MainActor private func refreshControllers() {
         // Capture the live profile on main. Re-fetching extendedGamepad on the
         // polling queue yielded stale axes on devices tested in the fork.
         if controllerGyro { PadAssistSensors.setControllerGyro(true) }
+        logSeenControllers()
         let live = GCController.controllers().compactMap { controller -> (GCController, GCExtendedGamepad)? in
             guard let profile = controller.extendedGamepad else { return nil }
             controller.handlerQueue = queue
@@ -411,7 +433,7 @@ final class GamepadInput: @unchecked Sendable {
                 // slot reads disconnected), so the slot's motors end here.
                 winios_gamepad_set_vibration(Int32(i), 0, 0)
                 clearBattery(i)
-                fputs("[xinput] ml1920 slot=\(i) disconnected\n", stderr)
+                LogStore.shared.log("[xinput] ml1920 slot=\(i) disconnected")
             }
             for (controller, profile) in live {
                 if Self.profileCheck, let i = controllers.firstIndex(where: { $0 === controller }) {
@@ -421,8 +443,11 @@ final class GamepadInput: @unchecked Sendable {
                     }
                     continue
                 }
-                guard !controllers.contains(where: { $0 === controller }),
-                      let i = controllers.firstIndex(where: { $0 == nil }) else { continue }
+                guard !controllers.contains(where: { $0 === controller }) else { continue }
+                guard let i = controllers.firstIndex(where: { $0 == nil }) else {
+                    LogStore.shared.log("[xinput] ml2200 \(Self.describe(controller, profile)) not given a slot: all \(controllers.count) slots taken")
+                    continue
+                }
                 controllers[i] = controller
                 joinedAt[i] = now
                 // A pad joining a slot starts still, before sample() publishes it,
@@ -430,7 +455,7 @@ final class GamepadInput: @unchecked Sendable {
                 winios_gamepad_set_vibration(Int32(i), 0, 0)
                 batteryNextRead[i] = 0   // ml2170: the new pad's battery at the next sample
                 attach(profile, slot: i)
-                fputs("[xinput] ml1920 slot=\(i) connected\n", stderr)
+                LogStore.shared.log("[xinput] ml1920 slot=\(i) connected \(Self.describe(controller, profile))")
             }
             // ml2172: GameController can report a reconnecting pad as a new
             // controller before the old object leaves. The new one then lands in
