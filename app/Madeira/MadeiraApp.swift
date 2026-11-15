@@ -36,6 +36,13 @@ struct MadeiraApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+                // madeira-duo: the root fills the window, safe area included. The views
+                // these modifiers add around it were sized to the safe area, and on the
+                // iPhone Duo the system moves the toolbar's buttons and the tab bar into
+                // the right-hand status column (its safe area's right inset), outside
+                // them: drawn, but every tap there missed (round 1c [touch-route] dump).
+                // The navigation stack inside keeps the safe area through UIKit.
+                .ignoresSafeArea()
                 .background(InteractionFrameRateInstaller())   // touch frame-rate request (New library grid)
                 .modifier(ClaimGamepadEvents())
                 .onAppear {

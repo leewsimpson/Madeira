@@ -363,6 +363,11 @@ final class TouchRouteObserver: UIGestureRecognizer, UIGestureRecognizerDelegate
             guard lines.count < 80 else { return }
             let frame = v.convert(v.bounds, to: w)
             let holds = frame.contains(p)
+            if holds, !parentHolds, let parent = v.superview {
+                // The view that stops the tap: the parent that does not reach the point.
+                lines.append("\(depth - 1) PARENT \(short(parent)) frame=\(rect(parent.convert(parent.bounds, to: w)))"
+                    + " touch=\(parent.isUserInteractionEnabled ? 1 : 0) clips=\(parent.clipsToBounds ? 1 : 0)")
+            }
             if holds {
                 let local = v.convert(p, from: w)
                 let hit = v.hitTest(local, with: nil).map(short) ?? "nil"
